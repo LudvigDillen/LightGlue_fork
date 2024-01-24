@@ -123,7 +123,7 @@ def plot_matches(kpts0, kpts1, color=None, lw=1.5, ps=4, a=1.0, labels=None, axe
     assert len(kpts0) == len(kpts1)
     if color is None:
         color = matplotlib.cm.hsv(np.random.rand(len(kpts0))).tolist()
-    elif len(color) > 0 and not isinstance(color[0], (tuple, list)):
+    elif len(color) > 0 and not isinstance(color[0], (tuple, list)) and not isinstance(color, (list)):
         color = [color] * len(kpts0)
 
     if lw > 0:

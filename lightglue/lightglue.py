@@ -263,10 +263,10 @@ def sigmoid_log_double_softmax(
     certainties = F.logsigmoid(z0) + F.logsigmoid(z1).transpose(1, 2)
     scores0 = F.log_softmax(sim, 2)
     scores1 = F.log_softmax(sim.transpose(-1, -2).contiguous(), 2).transpose(-1, -2)
-    scores = sim.new_full((b, m + 1, n + 1), 0)
-    scores[:, :m, :n] = scores0 + scores1 + certainties
-    scores[:, :-1, -1] = F.logsigmoid(-z0.squeeze(-1))
-    scores[:, -1, :-1] = F.logsigmoid(-z1.squeeze(-1))
+    scores = sim.new_full((b, m + 1, n + 1), 0)  # Dustbins
+    scores[:, :m, :n] = scores0 + scores1 + certainties  # Addition is like in exp-log-domain is equivalent to multiplication in normal domain
+    scores[:, :-1, -1] = F.logsigmoid(-z0.squeeze(-1))  # Set final column to minus log-sigmoid value of z0 (matchable points give low dustbin value => we should get a match for the corresponding row) 
+    scores[:, -1, :-1] = F.logsigmoid(-z1.squeeze(-1))  # Set final row to minus log-sigmoid value of z1      
     return scores
 
 
@@ -285,7 +285,7 @@ class MatchAssignment(nn.Module):
         sim = torch.einsum("bmd,bnd->bmn", mdesc0, mdesc1)
         z0 = self.matchability(desc0)
         z1 = self.matchability(desc1)
-        scores = sigmoid_log_double_softmax(sim, z0, z1)
+        scores = sigmoid_log_double_softmax(sim, z0, z1)  # NOTE: Study this
         return scores, sim
 
     def get_matchability(self, desc: torch.Tensor):
@@ -298,9 +298,9 @@ def filter_matches(scores: torch.Tensor, th: float):
     m0, m1 = max0.indices, max1.indices
     indices0 = torch.arange(m0.shape[1], device=m0.device)[None]
     indices1 = torch.arange(m1.shape[1], device=m1.device)[None]
-    mutual0 = indices0 == m1.gather(1, m0)
-    mutual1 = indices1 == m0.gather(1, m1)
-    max0_exp = max0.values.exp()
+    mutual0 = indices0 == m1.gather(1, m0)  # MNN
+    mutual1 = indices1 == m0.gather(1, m1)  # MNN
+    max0_exp = max0.values.exp()  # it is enough to study the max elements of max0
     zero = max0_exp.new_tensor(0)
     mscores0 = torch.where(mutual0, max0_exp, zero)
     mscores1 = torch.where(mutual1, mscores0.gather(1, m1), zero)
@@ -554,31 +554,9 @@ class LightGlue(nn.Module):
                 encoding1 = encoding1.index_select(-2, keep1)
                 prune1[:, ind1] += 1
 
-        if desc0.shape[1] == 0 or desc1.shape[1] == 0:  # no keypoints
-            m0 = desc0.new_full((b, m), -1, dtype=torch.long)
-            m1 = desc1.new_full((b, n), -1, dtype=torch.long)
-            mscores0 = desc0.new_zeros((b, m))
-            mscores1 = desc1.new_zeros((b, n))
-            matches = desc0.new_empty((b, 0, 2), dtype=torch.long)
-            mscores = desc0.new_empty((b, 0))
-            if not do_point_pruning:
-                prune0 = torch.ones_like(mscores0) * self.conf.n_layers
-                prune1 = torch.ones_like(mscores1) * self.conf.n_layers
-            return {
-                "matches0": m0,
-                "matches1": m1,
-                "matching_scores0": mscores0,
-                "matching_scores1": mscores1,
-                "stop": i + 1,
-                "matches": matches,
-                "scores": mscores,
-                "prune0": prune0,
-                "prune1": prune1,
-            }
-
-        desc0, desc1 = desc0[..., :m, :], desc1[..., :n, :]  # remove padding
-        scores, _ = self.log_assignment[i](desc0, desc1)
-        m0, m1, mscores0, mscores1 = filter_matches(scores, self.conf.filter_threshold)
+        desc0, desc1 = desc0[..., :m, :], desc1[..., :n, :]
+        scores, _ = self.log_assignment[i](desc0, desc1)  # NOTE: Might _ is a similarity matrix (S_ij). scores are P_ij Or scores? But I think it is on pruned points, and we want full sized matrices.
+        m0, m1, mscores0, mscores1 = filter_matches(scores, self.conf.filter_threshold)  # MNN and remove non-confident matches
         matches, mscores = [], []
         for k in range(b):
             valid = m0[k] > -1
